@@ -27,8 +27,10 @@ SEND_RAW_SCHEMA = vol.Schema(
         vol.Required("p2"): vol.All(vol.Coerce(int), vol.Range(0, 255)),
         vol.Required("p3"): vol.All(vol.Coerce(int), vol.Range(0, 255)),
         vol.Optional("mesh_id", default=0): vol.All(vol.Coerce(int), vol.Range(0, 0xFFFF)),
+        vol.Optional("via"): cv.string,
     }
 )
+DISCOVER_SCHEMA = vol.Schema({vol.Optional("via"): cv.string})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> bool:
@@ -51,19 +53,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
-    async def _discover(_call: ServiceCall) -> None:
+    async def _discover(call: ServiceCall) -> None:
         try:
+            if "via" in call.data:
+                await mesh.async_use_via(call.data["via"])
             await mesh.async_discover()
         except MeshError as err:
             raise HomeAssistantError(str(err)) from err
 
     async def _send_raw(call: ServiceCall) -> None:
         try:
+            if "via" in call.data:
+                await mesh.async_use_via(call.data["via"])
             await mesh.async_send_setting(call.data["mesh_id"], call.data["p1"], call.data["p2"], call.data["p3"])
         except MeshError as err:
             raise HomeAssistantError(str(err)) from err
 
-    hass.services.async_register(DOMAIN, "discover", _discover)
+    hass.services.async_register(DOMAIN, "discover", _discover, schema=DISCOVER_SCHEMA)
     hass.services.async_register(DOMAIN, "send_raw", _send_raw, schema=SEND_RAW_SCHEMA)
 
     if not entry.data.get(CONF_STRANDS):

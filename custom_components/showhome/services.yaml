@@ -1,4 +1,8 @@
 discover:
+  fields:
+    via:
+      selector:
+        text:
 send_raw:
   fields:
     p1:
@@ -20,3 +24,6 @@ send_raw:
       default: 0
       selector:
         number: { min: 0, max: 65535, mode: box }
+    via:
+      selector:
+        text:

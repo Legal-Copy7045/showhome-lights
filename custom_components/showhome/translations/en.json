@@ -5,7 +5,9 @@
       "user": {
         "title": "Holiday ShowHome lights",
         "description": "Found: {lights}.\n\nClose the Show App on your phone first. Enter the network password only if you set one in the Show App (the key icon); otherwise leave it blank.",
-        "data": { "pin": "Network password" }
+        "data": {
+          "pin": "Network password"
+        }
       }
     },
     "abort": {
@@ -19,23 +21,47 @@
       "init": {
         "title": "Brightness",
         "description": "How many brightness steps the lights have. Full brightness in Home Assistant sends this value.",
-        "data": { "brightness_levels": "Brightness steps" }
+        "data": {
+          "brightness_levels": "Brightness steps"
+        }
       }
     }
   },
   "services": {
     "discover": {
       "name": "Discover lights",
-      "description": "Ask every light in the mesh to report itself, adding any new ones as entities."
+      "description": "Ask every light in the mesh to report itself, adding any new ones as entities.",
+      "fields": {
+        "via": {
+          "name": "Via light",
+          "description": "Connect through this light (name, 4-character code or address). Empty string = strongest light."
+        }
+      }
     },
     "send_raw": {
       "name": "Send raw command",
       "description": "Send a raw ShowHome setting (for working out colours and effects).",
       "fields": {
-        "p1": { "name": "Mode", "description": "1 = colour, 2 = effect." },
-        "p2": { "name": "Value", "description": "Colour or effect number." },
-        "p3": { "name": "Brightness", "description": "0 turns the lights off." },
-        "mesh_id": { "name": "Mesh ID", "description": "0 = all lights, or a light's mesh_id attribute." }
+        "p1": {
+          "name": "Mode",
+          "description": "1 = colour, 2 = effect."
+        },
+        "p2": {
+          "name": "Value",
+          "description": "Colour or effect number."
+        },
+        "p3": {
+          "name": "Brightness",
+          "description": "0 turns the lights off."
+        },
+        "mesh_id": {
+          "name": "Mesh ID",
+          "description": "0 = all lights, or a light's mesh_id attribute."
+        },
+        "via": {
+          "name": "Via light",
+          "description": "Connect through this light (name, 4-character code or address). Empty string = strongest light."
+        }
       }
     }
   }

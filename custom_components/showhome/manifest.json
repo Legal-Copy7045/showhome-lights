@@ -10,11 +10,13 @@
   ],
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["bluetooth_adapters"],
+  "dependencies": [
+    "bluetooth_adapters"
+  ],
   "documentation": "https://github.com/Legal-Copy7045/showhome-lights",
   "integration_type": "hub",
   "iot_class": "assumed_state",
   "issue_tracker": "https://github.com/Legal-Copy7045/showhome-lights/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

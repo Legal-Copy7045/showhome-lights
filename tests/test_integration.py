@@ -162,3 +162,19 @@ async def test_first_setup_runs_discovery(hass: HomeAssistant, client) -> None:
     assert len(sent) == 2 and all(p[3] & 0xF == 0xE for p in sent)
     # connects to the strongest light first
     assert client.establish.call_args.args[2] == "LA3000014F9EC"
+
+
+async def test_via_and_diagnostics(hass: HomeAssistant, client) -> None:
+    from custom_components.showhome.diagnostics import async_get_config_entry_diagnostics
+
+    client.services = []
+    entry = await _setup(hass)
+    await hass.services.async_call(
+        DOMAIN, "send_raw", {"p1": 1, "p2": 1, "p3": 3, "via": "92A5"}, blocking=True
+    )
+    assert client.establish.call_args.args[2] == "LAB00001A92A5"
+    with patch("custom_components.showhome.diagnostics.bluetooth.async_discovered_service_info", return_value=[]):
+        diag = await async_get_config_entry_diagnostics(hass, entry)
+    kinds = [h["kind"] for h in diag["history"]]
+    assert "connected" in kinds and kinds[-1] == "tx"
+    assert diag["history"][-1]["via"] == "LAB00001A92A5"
