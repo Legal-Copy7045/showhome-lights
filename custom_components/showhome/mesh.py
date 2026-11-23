@@ -100,18 +100,33 @@ class ShowHomeMesh:
         last: Exception | None = None
         for info in candidates[:3]:
             try:
-                client = await establish_connection(
-                    BleakClientWithServiceCache,
-                    info.device,
-                    info.name or info.address,
-                    disconnected_callback=self._on_disconnect,
-                    max_attempts=2,
-                )
+                client = await self._connect_one(info)
             except (BleakError, BleakNotFoundError, TimeoutError) as err:
                 _LOGGER.debug("Could not connect to %s: %s", info.name, err)
                 self._log("connect_failed", name=info.name, address=info.address, error=repr(err))
                 last = err
                 continue
+            self._client = client
+            self._connected_name = info.name
+            return client
+        raise MeshError(f"Could not connect to any ShowHome light: {last}")
+
+    async def _connect_one(self, info: bluetooth.BluetoothServiceInfoBleak) -> BleakClientWithServiceCache:
+        """Connect to one light, making sure the control service is really there.
+
+        Through a proxy, establish_connection can hand back a cached, empty
+        service list, so the FEF1 characteristics look missing. When that
+        happens, clear the cache and rediscover once before giving up.
+        """
+        client: BleakClientWithServiceCache | None = None
+        for attempt in (1, 2):
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                info.device,
+                info.name or info.address,
+                disconnected_callback=self._on_disconnect,
+                max_attempts=2,
+            )
             self.gatt_services = [
                 {
                     "uuid": svc.uuid,
@@ -122,21 +137,39 @@ class ShowHomeMesh:
                 }
                 for svc in client.services
             ]
-            notify = []
-            for char in (CHAR_CONTINUE, CHAR_COMPLETE):
-                try:
-                    await client.start_notify(char, self._on_notify)
-                    notify.append(char)
-                except BleakError as err:
-                    _LOGGER.debug("Notifications unavailable on %s: %s", char, err)
-                    self._log("notify_failed", char=char, error=repr(err))
-            self._client = client
-            self._connected_name = info.name
-            self._log("connected", name=info.name, address=info.address, rssi=info.rssi,
-                      source=getattr(info, "source", None), notify=notify)
-            _LOGGER.debug("Connected to ShowHome mesh via %s (%s dBm)", info.name, info.rssi)
-            return client
-        raise MeshError(f"Could not connect to any ShowHome light: {last}")
+            if self._has_controls(client):
+                break
+            self._log("services_incomplete", name=info.name, attempt=attempt,
+                      services=[s["uuid"] for s in self.gatt_services])
+            if attempt == 1:
+                await client.clear_cache()
+                await client.disconnect()
+                continue
+            await client.disconnect()
+            raise BleakError(
+                f"{info.name}: control service {SERVICE_UUID} not found after cache refresh"
+            )
+
+        assert client is not None
+        notify = []
+        for char in (CHAR_CONTINUE, CHAR_COMPLETE):
+            try:
+                await client.start_notify(char, self._on_notify)
+                notify.append(char)
+            except BleakError as err:
+                _LOGGER.debug("Notifications unavailable on %s: %s", char, err)
+                self._log("notify_failed", char=char, error=repr(err))
+        self._log("connected", name=info.name, address=info.address, rssi=info.rssi,
+                  source=getattr(info, "source", None), notify=notify)
+        _LOGGER.debug("Connected to ShowHome mesh via %s (%s dBm)", info.name, info.rssi)
+        return client
+
+    @staticmethod
+    def _has_controls(client: BleakClientWithServiceCache) -> bool:
+        try:
+            return all(client.services.get_characteristic(c) is not None for c in (CHAR_CONTINUE, CHAR_COMPLETE))
+        except BleakError:
+            return False
 
     @callback
     def _on_disconnect(self, _client: BleakClientWithServiceCache) -> None:
@@ -198,13 +231,22 @@ class ShowHomeMesh:
             _LOGGER.debug("Send failed (%s), reconnecting", err)
             self._log("send_failed", error=repr(err))
             await self.async_disconnect()
-            await self._send(self._cmd.setting(dest, p1, p2, p3))
+            try:
+                await self._send(self._cmd.setting(dest, p1, p2, p3))
+            except (BleakError, TimeoutError) as err2:
+                self._log("send_failed", error=repr(err2))
+                raise MeshError(f"Could not send to the lights: {err2}") from err2
 
     async def async_discover(self) -> None:
         """Ask every light to report its mesh ID and name (replies are async)."""
-        await self._send(self._cmd.discover())
-        await asyncio.sleep(1.5)
-        await self._send(self._cmd.discover())
+        try:
+            await self._send(self._cmd.discover())
+            await asyncio.sleep(1.5)
+            await self._send(self._cmd.discover())
+        except (BleakError, TimeoutError) as err:
+            self._log("send_failed", error=repr(err))
+            await self.async_disconnect()
+            raise MeshError(f"Could not reach the lights to discover them: {err}") from err
 
     async def async_disconnect(self) -> None:
         if self._idle:

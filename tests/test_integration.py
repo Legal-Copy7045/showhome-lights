@@ -167,7 +167,6 @@ async def test_first_setup_runs_discovery(hass: HomeAssistant, client) -> None:
 async def test_via_and_diagnostics(hass: HomeAssistant, client) -> None:
     from custom_components.showhome.diagnostics import async_get_config_entry_diagnostics
 
-    client.services = []
     entry = await _setup(hass)
     await hass.services.async_call(
         DOMAIN, "send_raw", {"p1": 1, "p2": 1, "p3": 3, "via": "92A5"}, blocking=True
@@ -178,3 +177,78 @@ async def test_via_and_diagnostics(hass: HomeAssistant, client) -> None:
     kinds = [h["kind"] for h in diag["history"]]
     assert "connected" in kinds and kinds[-1] == "tx"
     assert diag["history"][-1]["via"] == "LAB00001A92A5"
+
+
+async def test_empty_service_cache_is_cleared_and_retried(hass: HomeAssistant) -> None:
+    """Through a proxy, the first connection can return an empty service list.
+    The mesh must clear the cache and reconnect, not crash the service call."""
+    from custom_components.showhome.csrmesh import CHAR_COMPLETE, CHAR_CONTINUE
+
+    good_char = lambda u, p: MagicMock(uuid=u, handle=1, properties=p)
+    good = MagicMock(uuid=SERVICE_UUID)
+    good.characteristics = [good_char(CHAR_CONTINUE, ["write-without-response"]),
+                            good_char(CHAR_COMPLETE, ["write", "notify"])]
+
+    class Services(list):
+        def get_characteristic(self, uuid):
+            for svc in self:
+                for c in svc.characteristics:
+                    if c.uuid == uuid:
+                        return c
+            return None
+
+    class FakeClient:
+        def __init__(self):
+            self.is_connected = True
+            self.clear_cache_count = 0
+            self.writes = []
+            self._disconnected = False
+        @property
+        def services(self):
+            return Services([]) if self.clear_cache_count == 0 else Services([good])
+        async def start_notify(self, *a):
+            pass
+        async def clear_cache(self):
+            self.clear_cache_count += 1
+        async def disconnect(self):
+            pass
+        async def write_gatt_char(self, char, data, response=True):
+            self.writes.append((char, bytes(data)))
+
+    client = FakeClient()
+
+    with patch("custom_components.showhome.mesh.establish_connection", AsyncMock(return_value=client)):
+        entry = MockConfigEntry(domain=DOMAIN, data={CONF_PIN: "", CONF_STRANDS: {"LA3000014F9EC": 5}})
+        entry.add_to_hass(hass)
+        with patch(
+            "custom_components.showhome.mesh.bluetooth.async_discovered_service_info",
+            return_value=[_info()],
+        ):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+            await hass.services.async_call(DOMAIN, "send_raw", {"p1": 1, "p2": 1, "p3": 3}, blocking=True)
+
+    assert client.clear_cache_count == 1   # cache was refreshed once
+    # a 27-byte packet splits into two chunk writes; the last is on CHAR_COMPLETE
+    assert client.writes and client.writes[-1][0] == CHAR_COMPLETE
+
+
+async def test_unreachable_lights_raise_clean_error(hass: HomeAssistant) -> None:
+    from homeassistant.exceptions import HomeAssistantError
+    from bleak.exc import BleakError
+
+    with patch(
+        "custom_components.showhome.mesh.bluetooth.async_discovered_service_info",
+        return_value=[_info()],
+    ), patch(
+        "custom_components.showhome.config_flow.async_discovered_service_info", return_value=[_info()]
+    ), patch(
+        "custom_components.showhome.mesh.establish_connection",
+        AsyncMock(side_effect=BleakError("gatt error")),
+    ):
+        entry = MockConfigEntry(domain=DOMAIN, data={CONF_PIN: "", CONF_STRANDS: {"LA3000014F9EC": 5}})
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        with pytest.raises(HomeAssistantError):
+            await hass.services.async_call(DOMAIN, "send_raw", {"p1": 1, "p2": 1, "p3": 3}, blocking=True)
