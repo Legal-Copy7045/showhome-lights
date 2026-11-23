@@ -1,49 +1,103 @@
 # Holiday ShowHome Lights for Home Assistant
 
-Control Bluetooth Christmas lights made for the **Holiday ShowHome / Show App**
-(icicles, snowflakes, LED balls, trees, rope lights) from Home Assistant, through
-any Bluetooth adapter or ESPHome Bluetooth proxy.
+A Home Assistant integration for the Bluetooth Christmas lights sold for the
+**Holiday ShowHome / "Show App"** — LED balls, snowflakes, icicles, trees and
+rope lights. They advertise as `LA…` names with service UUID `0xFEF1` and speak
+**CSRmesh**.
 
-The lights advertise as `LA…` names with service `0xFEF1` and talk encrypted
-CSRmesh. All lights form one mesh, so Home Assistant connects to the strongest
-one and reaches every strand through it.
+> ## ⚠️ Status: research / not yet controlling — help wanted
+>
+> **This integration reliably *sees* the lights and can *capture* their command
+> traffic, but it cannot yet *control* them.** The commands are encrypted, and
+> the key these particular products derive from the app password is **not** the
+> standard CSRmesh formula — so we can't forge or decrypt commands yet. We've
+> taken it as far as the lights themselves allow without the app's internals,
+> and we're **stopping here for now**.
+>
+> **If you know this hardware, CSRmesh, or can read the Show App's key
+> derivation — we'd love your feedback, ideas, or a PR.** See
+> [What's blocking us](#whats-blocking-us) and
+> [docs/FINDINGS.md](docs/FINDINGS.md), and there's a real captured dataset to
+> work from in [`samples/`](samples/). Please open an issue.
 
-## Install
+## What works today
+
+- **Discovery** — auto-detects the lights over any Bluetooth adapter or ESPHome
+  Bluetooth proxy, and creates a light entity per strand plus an "all lights" one.
+- **Reliable connection** — connects through the strongest light, recovers from
+  the empty-service-cache problem on reconnect, and drops the link after 60 s idle.
+- **Over-the-air capture** — the lights rebroadcast every command across the mesh
+  as advertisements, and the proxies hear them. The `showhome.capture_adverts`
+  action records them all (see below). **This is the key discovery of the project.**
+- **A full, tested integration skeleton** — the moment the key derivation is
+  known, sending commands is a tiny change. 19+ passing tests.
+
+## What does NOT work yet
+
+- **Turning the lights on/off or changing colour from Home Assistant.** Commands
+  are sent in the correct shape but the lights reject them, because the
+  encryption key is wrong (see below). The light entities therefore don't
+  actually control anything yet.
+
+## What's blocking us
+
+Two walls, both living inside the Show App, not in Home Assistant:
+
+1. **Unknown key derivation.** The reference project
+   ([craus81/Christmas-lights](https://github.com/craus81/Christmas-lights))
+   showed this app normally derives its CSRmesh key as
+   `reversed(SHA256(password + b"\x00MCP"))[:16]`. We captured hundreds of real
+   single-command ("Red") packets with a known password (`123456`) and tested
+   that formula plus eight others across every AES mode and framing. **All
+   produced noise** — so these products transform the password differently
+   before deriving the key (or "Red" is a varying per-frame effect, not one
+   fixed command). Cracking this needs the app's actual key-derivation code.
+2. **Replay is blocked.** The lights track a per-source sequence number and
+   reject any command older than the last one seen, so we can't simply replay a
+   captured packet. Forging a fresh one needs the key from wall #1.
+
+Full technical detail, including the packet layout and everything tried, is in
+**[docs/FINDINGS.md](docs/FINDINGS.md)**. A real capture to experiment with is in
+**[`samples/red_all_lights_123456.txt`](samples/red_all_lights_123456.txt)**.
+
+## Install (for tinkering / to help)
 
 1. HACS → Custom repositories → add this repo as an *Integration*, install, restart.
-2. Close the Show App on your phone (a light accepts one Bluetooth connection).
-3. Home Assistant discovers the lights; open the notification and click **Configure**.
-   Leave the password blank unless you set one in the Show App (key icon).
+2. Settings → Devices & Services → it should discover the lights. In **Configure**,
+   enter the app password (or leave blank).
 
-## What you get
+## Diagnostic / research actions
 
-| Entity | Controls |
+| Action | What it does |
 |---|---|
-| `light.christmas_lights_all` | Every light at once (mesh broadcast) |
-| One light per strand, e.g. `light.icicles_f9ec` | That strand only |
+| `showhome.discover` | Ask the mesh to announce its lights (they don't always answer). |
+| `showhome.capture_adverts` | Record every advertisement the proxies hear for N seconds (`seconds`, `all`). Read it back from the integration's **Download diagnostics**. This is how command traffic is captured. |
+| `showhome.send_raw` | Send a raw `p1,p2,p3` command (needs the right key to work). |
+| `showhome.inject` | Write a raw captured packet to the control characteristic (replay; currently blocked by sequence numbers). |
+| `showhome.find_key` | Try standard key formulas and see which the lights answer to. |
+| `showhome.read_chars` | Dump the readable `0xFEF1` characteristics. |
 
-Strands are found automatically on first setup (run `showhome.discover` to find new ones).
-Each light has on/off, brightness and an **effect** list: `Colour N` picks a
-fixed colour, `Effect N` picks an animation.
+### How to capture command traffic (to help crack it)
 
-The lights never report their state, so states are assumed (last command sent).
-Home Assistant drops the Bluetooth link after 60 s idle so the Show App can connect again.
+1. Set a known password in the Show App and enter the same in the integration's **Configure**.
+2. Call `showhome.capture_adverts` with `seconds: 60, all: true`.
+3. While it runs, drive the lights from the Show App — ideally **one command
+   repeatedly** (e.g. only Red), so every captured packet is the same command.
+4. Open the integration → **Download diagnostics**; the `capture` array holds the
+   adverts. The command packets are the `svc` entries under UUID `0000fef1…`.
 
-## Not yet known
+## How it's meant to work (once unblocked)
 
-Only colours 0 (blue), 1 (red) and 2 (green) are named; the rest are numbered.
-The real number of brightness steps is not known: set it in the integration's
-options (default 10). Use `showhome.send_raw` to experiment:
+All lights form one CSRmesh network, so HA connects to the strongest light and
+reaches the rest through it. Each product type is recognised by its name prefix
+(`LA3`=Icicles, `LA4`=Snowflake, `LAB`=LED Ball, `LAC`=Tree, `LA7`=Rope). The
+integration already builds per-strand and "all lights" entities with on/off,
+brightness and an effect list; they just need a key that the lights accept.
 
-```yaml
-action: showhome.send_raw
-data: { p1: 1, p2: 5, p3: 3, mesh_id: 0 }   # mode 1=colour/2=effect, value, brightness (0=off)
-```
+## Credits
 
-## Protocol credit
-
-Packet format and crypto from [craus81/Christmas-lights](https://github.com/craus81/Christmas-lights),
-itself based on [nkaminski/csrmesh](https://github.com/nkaminski/csrmesh).
+- Protocol starting point: [craus81/Christmas-lights](https://github.com/craus81/Christmas-lights)
+- CSRmesh crypto reference: [nkaminski/csrmesh](https://github.com/nkaminski/csrmesh)
 
 ## Tests
 
@@ -51,3 +105,7 @@ itself based on [nkaminski/csrmesh](https://github.com/nkaminski/csrmesh).
 pip install pytest-homeassistant-custom-component
 pytest
 ```
+
+## License
+
+MIT
