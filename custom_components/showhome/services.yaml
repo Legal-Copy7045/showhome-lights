@@ -1,0 +1,22 @@
+discover:
+send_raw:
+  fields:
+    p1:
+      required: true
+      default: 1
+      selector:
+        number: { min: 0, max: 255, mode: box }
+    p2:
+      required: true
+      default: 1
+      selector:
+        number: { min: 0, max: 255, mode: box }
+    p3:
+      required: true
+      default: 3
+      selector:
+        number: { min: 0, max: 255, mode: box }
+    mesh_id:
+      default: 0
+      selector:
+        number: { min: 0, max: 65535, mode: box }
