@@ -47,3 +47,16 @@ capture_adverts:
       default: false
       selector:
         boolean:
+inject:
+  fields:
+    packet:
+      required: true
+      selector:
+        text:
+    via:
+      selector:
+        text:
+    repeat:
+      default: 1
+      selector:
+        number: { min: 1, max: 50, mode: box }

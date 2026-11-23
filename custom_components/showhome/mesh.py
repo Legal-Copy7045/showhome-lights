@@ -304,6 +304,28 @@ class ShowHomeMesh:
         self._log("network_tags", tags=network_tag_candidates(self._pin))
         return summary
 
+    async def async_inject(self, packet_hex: str, via: str | None = None, repeat: int = 1) -> None:
+        """Write a raw mesh packet to the control characteristic (replay).
+
+        Used to replay a captured, validly-signed command without needing the
+        key. The packet is the on-air mesh PDU as captured in the advert.
+        """
+        if via is not None:
+            await self.async_use_via(via)
+        packet = bytes.fromhex(packet_hex.replace(" ", ""))
+        try:
+            async with self._lock:
+                client = await self._ensure_connected()
+                for _ in range(max(1, repeat)):
+                    for char, chunk in split_for_write(packet):
+                        await client.write_gatt_char(char, chunk, response=self._wants_response(client, char))
+                    await asyncio.sleep(0.12)
+                self._schedule_idle_disconnect()
+            self._log("inject", via=self._connected_name, packet=packet.hex(), repeat=repeat)
+        except (BleakError, TimeoutError) as err:
+            self._log("send_failed", error=repr(err))
+            raise MeshError(f"Could not inject packet: {err}") from err
+
     async def async_capture_adverts(self, seconds: int = 45, all_devices: bool = False) -> dict:
         """Record every advertisement the proxies deliver for a window.
 

@@ -32,6 +32,13 @@ SEND_RAW_SCHEMA = vol.Schema(
     }
 )
 DISCOVER_SCHEMA = vol.Schema({vol.Optional("via"): cv.string})
+INJECT_SCHEMA = vol.Schema(
+    {
+        vol.Required("packet"): cv.string,
+        vol.Optional("via"): cv.string,
+        vol.Optional("repeat", default=1): vol.All(vol.Coerce(int), vol.Range(1, 50)),
+    }
+)
 CAPTURE_SCHEMA = vol.Schema(
     {
         vol.Optional("seconds", default=45): vol.All(vol.Coerce(int), vol.Range(5, 180)),
@@ -99,6 +106,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> 
         except MeshError as err:
             raise HomeAssistantError(str(err)) from err
 
+    async def _inject(call: ServiceCall) -> None:
+        try:
+            await mesh.async_inject(call.data["packet"], call.data.get("via"), call.data.get("repeat", 1))
+        except MeshError as err:
+            raise HomeAssistantError(str(err)) from err
+
     async def _capture_adverts(call: ServiceCall) -> ServiceResponse:
         summary = await mesh.async_capture_adverts(
             int(call.data.get("seconds", 45)), bool(call.data.get("all", False))
@@ -125,6 +138,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> 
         DOMAIN, "capture_adverts", _capture_adverts, schema=CAPTURE_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
+    hass.services.async_register(DOMAIN, "inject", _inject, schema=INJECT_SCHEMA)
 
     if not entry.data.get(CONF_STRANDS):
         entry.async_create_background_task(hass, _first_discovery(mesh), "showhome_discovery")
@@ -154,4 +168,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) ->
         hass.services.async_remove(DOMAIN, "find_key")
         hass.services.async_remove(DOMAIN, "read_chars")
         hass.services.async_remove(DOMAIN, "capture_adverts")
+        hass.services.async_remove(DOMAIN, "inject")
     return ok

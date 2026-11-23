@@ -16,7 +16,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowHom
     mesh = entry.runtime_data
     return {
         "pin_set": bool(entry.options.get("pin", entry.data.get("pin"))),
-        "options": dict(entry.options),
+        "options": {**dict(entry.options), "pin": "***" if entry.options.get("pin") else ""},
         "strands": entry.data.get(CONF_STRANDS, {}),
         "connected_via": mesh.connected_name,
         "gatt_services": mesh.gatt_services,
