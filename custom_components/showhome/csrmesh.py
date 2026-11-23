@@ -55,6 +55,56 @@ def derive_key(pin: str) -> bytes:
     return bytes(digest[:16])
 
 
+def key_candidates(pin: str) -> list[tuple[str, bytes]]:
+    """Standard CSRmesh-style key derivations to try for one known passphrase.
+
+    These are a fixed set of published hashing formulas applied to the single
+    configured password, used to detect which one the app uses by seeing which
+    key the lights actually answer to. This is protocol detection, not a
+    password search: the passphrase is fixed and already known to the user.
+    """
+    pw = pin.encode()
+    rev = lambda b: bytes(bytearray(b)[::-1])
+    out: list[tuple[str, bytes]] = [
+        ("rev(sha256(pw+\\0MCP))[:16]", rev(hashlib.sha256(pw + b"\x00MCP").digest())[:16]),
+        ("sha256(pw+\\0MCP)[:16]", hashlib.sha256(pw + b"\x00MCP").digest()[:16]),
+        ("rev(sha256(pw+MCP))[:16]", rev(hashlib.sha256(pw + b"MCP").digest())[:16]),
+        ("rev(sha256(\\0MCP+pw))[:16]", rev(hashlib.sha256(b"\x00MCP" + pw).digest())[:16]),
+        ("rev(sha256(pw))[:16]", rev(hashlib.sha256(pw).digest())[:16]),
+        ("sha256(pw)[:16]", hashlib.sha256(pw).digest()[:16]),
+        ("sha256(pw)[16:]", hashlib.sha256(pw).digest()[16:]),
+        ("md5(pw+\\0MCP)", hashlib.md5(pw + b"\x00MCP").digest()),
+        ("md5(pw)", hashlib.md5(pw).digest()),
+        ("sha1(pw+\\0MCP)[:16]", hashlib.sha1(pw + b"\x00MCP").digest()[:16]),
+        ("sha1(pw)[:16]", hashlib.sha1(pw).digest()[:16]),
+        ("pw padded to 16", (pw + b"\x00" * 16)[:16]),
+        ("rev(pw padded to 16)", rev((pw + b"\x00" * 16)[:16])),
+    ]
+    # De-duplicate identical keys, keeping the first (most likely) name.
+    seen: set[bytes] = set()
+    unique: list[tuple[str, bytes]] = []
+    for name, key in out:
+        if key not in seen:
+            seen.add(key)
+            unique.append((name, key))
+    return unique
+
+
+def network_tag_candidates(pin: str) -> dict[str, str]:
+    """2-byte 'network tag' derivations, for matching the lights' advertised id.
+
+    The lights advertise a 2-byte network tag that changed when the password
+    was set, so it is derived from the passphrase. Matching it to the real
+    advertised value independently confirms the derivation.
+    """
+    tags: dict[str, str] = {}
+    for name, key in key_candidates(pin):
+        tags[f"{name} [0:2]"] = key[:2].hex()
+        tags[f"{name} [-2:]"] = key[-2:].hex()
+        tags[f"{name} [0:2] rev"] = bytes(bytearray(key[:2])[::-1]).hex()
+    return tags
+
+
 def _keystream_xor(key: bytes, iv: bytes, data: bytes) -> bytes:
     # OFB with this IV: keystream block n = AES^n(IV). Implemented over ECB so we
     # don't depend on OFB being available in every cryptography release.

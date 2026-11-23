@@ -8,9 +8,10 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.components import persistent_notification
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_PIN, CONF_STRANDS, DOMAIN, SIGNAL_STRANDS_UPDATED
@@ -70,8 +71,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> 
         except MeshError as err:
             raise HomeAssistantError(str(err)) from err
 
+    async def _find_key(call: ServiceCall) -> ServiceResponse:
+        try:
+            result = await mesh.async_find_key(call.data.get("via"))
+        except MeshError as err:
+            raise HomeAssistantError(str(err)) from err
+        found = result.get("found")
+        persistent_notification.async_create(
+            hass,
+            (f"Working key formula: **{found}**" if found else "No standard formula matched — see the service response.")
+            + "\n\nResults:\n"
+            + "\n".join(f"- {r['formula']}: {r['result']}" for r in result["results"]),
+            title="ShowHome key finder",
+            notification_id="showhome_find_key",
+        )
+        return result
+
+    async def _read_chars(call: ServiceCall) -> ServiceResponse:
+        try:
+            return await mesh.async_read_chars(call.data.get("via"))
+        except MeshError as err:
+            raise HomeAssistantError(str(err)) from err
+
     hass.services.async_register(DOMAIN, "discover", _discover, schema=DISCOVER_SCHEMA)
     hass.services.async_register(DOMAIN, "send_raw", _send_raw, schema=SEND_RAW_SCHEMA)
+    hass.services.async_register(
+        DOMAIN, "find_key", _find_key, schema=DISCOVER_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+    )
+    hass.services.async_register(
+        DOMAIN, "read_chars", _read_chars, schema=DISCOVER_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+    )
 
     if not entry.data.get(CONF_STRANDS):
         entry.async_create_background_task(hass, _first_discovery(mesh), "showhome_discovery")
@@ -98,4 +127,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) ->
         await entry.runtime_data.async_disconnect()
         hass.services.async_remove(DOMAIN, "discover")
         hass.services.async_remove(DOMAIN, "send_raw")
+        hass.services.async_remove(DOMAIN, "find_key")
+        hass.services.async_remove(DOMAIN, "read_chars")
     return ok

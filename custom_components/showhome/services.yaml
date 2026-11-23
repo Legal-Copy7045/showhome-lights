@@ -27,3 +27,13 @@ send_raw:
     via:
       selector:
         text:
+find_key:
+  fields:
+    via:
+      selector:
+        text:
+read_chars:
+  fields:
+    via:
+      selector:
+        text:

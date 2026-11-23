@@ -270,3 +270,62 @@ async def test_password_from_options_is_used(hass: HomeAssistant, client) -> Non
     # packets must decrypt with the options password, not the blank data one
     assert _sent(client, "holiday1")
     assert entry.runtime_data._key == derive_key("holiday1")
+
+
+async def test_find_key_detects_the_working_formula(hass: HomeAssistant) -> None:
+    """find_key must report the formula whose key the lights actually answer to."""
+    from custom_components.showhome.csrmesh import (
+        CHAR_COMPLETE, CHAR_CONTINUE, SERVICE_UUID, key_candidates, make_packet, open_packet,
+    )
+
+    pin = "holiday1"
+    target_name, target_key = key_candidates(pin)[3]   # the light answers only to this one
+
+    char_c = MagicMock(uuid=CHAR_CONTINUE, handle=1, properties=["write-without-response", "write", "notify"])
+    char_d = MagicMock(uuid=CHAR_COMPLETE, handle=2, properties=["write-without-response", "write", "notify"])
+    svc = MagicMock(uuid=SERVICE_UUID)
+    svc.characteristics = [char_c, char_d]
+
+    class Services(list):
+        def get_characteristic(self, uuid):
+            return {CHAR_CONTINUE: char_c, CHAR_COMPLETE: char_d}.get(uuid)
+
+    class FakeLight:
+        """Replies to a discovery iff it was encrypted with target_key."""
+        def __init__(self):
+            self.is_connected = True
+            self._notify = {}
+            self._buf = b""
+            self.services = Services([svc])
+        async def start_notify(self, char, cb):
+            self._notify[char] = cb
+        async def disconnect(self):
+            self.is_connected = False
+        async def clear_cache(self):
+            pass
+        async def write_gatt_char(self, char, data, response=True):
+            self._buf += bytes(data)
+            if char != CHAR_COMPLETE:
+                return
+            packet, self._buf = self._buf, b""
+            if open_packet(target_key, packet) is None:
+                return   # wrong key -> silent, like the real lights
+            reply = bytes([0x11, 0x00, 0x73, 0x2E]) + b"LAB" + bytes.fromhex("DE6114BB3F")
+            pkt = make_packet(target_key, 7, reply, source=0x0011)
+            self._notify[CHAR_CONTINUE](MagicMock(uuid=CHAR_CONTINUE), bytearray(pkt[:20]))
+            self._notify[CHAR_COMPLETE](MagicMock(uuid=CHAR_COMPLETE), bytearray(pkt[20:]))
+
+    light = FakeLight()
+    with patch("custom_components.showhome.mesh.establish_connection", AsyncMock(return_value=light)), patch(
+        "custom_components.showhome.mesh.bluetooth.async_discovered_service_info", return_value=[_info()]
+    ):
+        entry = MockConfigEntry(
+            domain=DOMAIN, data={CONF_PIN: "", CONF_STRANDS: {"LA3000014F9EC": 5}}, options={"pin": pin}
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        result = await hass.services.async_call(DOMAIN, "find_key", {}, blocking=True, return_response=True)
+
+    assert result["found"] == target_name
+    assert entry.runtime_data._key == target_key   # mesh keeps the working key

@@ -101,3 +101,20 @@ def test_product_names():
     assert cm.product_for("LAB00001A92A5") == "LED Ball"
     assert cm.product_for("LAC0000139A2F") == "Tree"
     assert cm.product_for("LAZ0000000000") == "Light"
+
+
+def test_key_candidates_include_reference_and_are_unique():
+    cands = cm.key_candidates("holiday1")
+    names = [n for n, _ in cands]
+    assert names[0].startswith("rev(sha256(pw+\\0MCP))")
+    assert cands[0][1] == cm.derive_key("holiday1")      # first is the reference formula
+    keys = [k for _, k in cands]
+    assert len(keys) == len(set(keys))                   # de-duplicated
+    assert all(len(k) == 16 for k in keys)
+
+
+def test_network_tag_candidates_cover_both_byte_orders():
+    tags = cm.network_tag_candidates("holiday1")
+    ref = cm.derive_key("holiday1")
+    assert tags["rev(sha256(pw+\\0MCP))[:16] [0:2]"] == ref[:2].hex()
+    assert tags["rev(sha256(pw+\\0MCP))[:16] [0:2] rev"] == bytes(bytearray(ref[:2])[::-1]).hex()

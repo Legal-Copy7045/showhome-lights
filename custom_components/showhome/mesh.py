@@ -51,6 +51,7 @@ def is_showhome(info: bluetooth.BluetoothServiceInfoBleak) -> bool:
 class ShowHomeMesh:
     def __init__(self, hass: HomeAssistant, pin: str) -> None:
         self.hass = hass
+        self._pin = pin
         self._key = derive_key(pin)
         self._cmd = CommandBuilder(random.randrange(16))
         self._seq = random.randrange(1, 0xFFFFF)
@@ -65,6 +66,7 @@ class ShowHomeMesh:
         self.history: deque[dict] = deque(maxlen=200)
         self.gatt_services: list[dict] = []
         self._via: str | None = None
+        self._verified_count = 0
 
     def _log(self, kind: str, **data) -> None:
         self.history.append({"t": round(time.time(), 3), "kind": kind, **data})
@@ -189,6 +191,7 @@ class ShowHomeMesh:
             _LOGGER.debug("Unreadable mesh packet (wrong password?): %s", packet.hex())
             self._log("rx_unreadable", packet=packet.hex())
             return
+        self._verified_count += 1
         self._log("rx", source=f"{msg.source:04x}", payload=msg.payload.hex(" "))
         name = parse_identity(msg.payload)
         _LOGGER.debug("Mesh rx from %04x: %s", msg.source, msg.payload.hex(" "))
@@ -247,6 +250,78 @@ class ShowHomeMesh:
             self._log("send_failed", error=repr(err))
             await self.async_disconnect()
             raise MeshError(f"Could not reach the lights to discover them: {err}") from err
+
+    async def async_find_key(self, via: str | None = None) -> dict:
+        """Try each standard key derivation and see which one the lights answer.
+
+        For the one configured password, derive a key with each published
+        formula, send a discovery, and watch for a reply that verifies with
+        that same key. The lights only reply when the key is right, so the
+        formula that gets a reply is the one the app uses. Reports formula
+        names only; the password is never included.
+        """
+        from .csrmesh import key_candidates, network_tag_candidates
+
+        if via is not None:
+            await self.async_use_via(via)
+
+        results: list[dict] = []
+        hit: str | None = None
+        real_key = self._key
+        try:
+            for name, key in key_candidates(self._pin):
+                self._key = key
+                before = self._verified_count
+                try:
+                    async with self._lock:
+                        client = await self._ensure_connected()
+                        self._seq = (self._seq + 1) & 0xFFFFFF
+                        packet = make_packet(key, self._seq, self._cmd.discover())
+                        for char, chunk in split_for_write(packet):
+                            await client.write_gatt_char(char, chunk, response=self._wants_response(client, char))
+                        self._schedule_idle_disconnect()
+                except (BleakError, TimeoutError) as err:
+                    results.append({"formula": name, "result": f"send failed: {err}"})
+                    continue
+                await asyncio.sleep(1.4)
+                ok = self._verified_count > before
+                results.append({"formula": name, "result": "REPLY — this is the key" if ok else "no reply"})
+                if ok:
+                    hit = name
+                    break
+        finally:
+            self._key = real_key if hit is None else self._key  # keep the working key if found
+
+        summary = {
+            "connected_via": self._connected_name,
+            "found": hit,
+            "results": results,
+            "advertised_tag_hint": "match these against the lights' advertised id (e.g. DE61)",
+            "network_tag_candidates": network_tag_candidates(self._pin),
+        }
+        self._log("find_key", **{k: v for k, v in summary.items() if k != "network_tag_candidates"})
+        self._log("network_tags", tags=network_tag_candidates(self._pin))
+        return summary
+
+    async def async_read_chars(self, via: str | None = None) -> dict:
+        """Read the readable FEF1 characteristics (may expose CSRmesh state)."""
+        if via is not None:
+            await self.async_use_via(via)
+        async with self._lock:
+            client = await self._ensure_connected()
+            out: dict[str, str] = {}
+            for svc in client.services:
+                if "fef1" not in svc.uuid.lower():
+                    continue
+                for ch in svc.characteristics:
+                    if "read" in ch.properties:
+                        try:
+                            out[ch.uuid] = bytes(await client.read_gatt_char(ch)).hex()
+                        except BleakError as err:
+                            out[ch.uuid] = f"read failed: {err}"
+            self._schedule_idle_disconnect()
+        self._log("read_chars", chars=out)
+        return out
 
     async def async_disconnect(self) -> None:
         if self._idle:
