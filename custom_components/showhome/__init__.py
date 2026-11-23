@@ -32,6 +32,12 @@ SEND_RAW_SCHEMA = vol.Schema(
     }
 )
 DISCOVER_SCHEMA = vol.Schema({vol.Optional("via"): cv.string})
+CAPTURE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("seconds", default=45): vol.All(vol.Coerce(int), vol.Range(5, 180)),
+        vol.Optional("all", default=False): cv.boolean,
+    }
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> bool:
@@ -93,6 +99,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> 
         except MeshError as err:
             raise HomeAssistantError(str(err)) from err
 
+    async def _capture_adverts(call: ServiceCall) -> ServiceResponse:
+        summary = await mesh.async_capture_adverts(
+            int(call.data.get("seconds", 45)), bool(call.data.get("all", False))
+        )
+        persistent_notification.async_create(
+            hass,
+            f"Captured {summary['total_adverts']} adverts "
+            f"({summary['la_adverts']} from lights, {summary['adverts_with_mfr_or_svc_data']} "
+            f"carrying extra data) from {summary['distinct_addresses']} devices.",
+            title="ShowHome advert capture",
+            notification_id="showhome_capture",
+        )
+        return summary
+
     hass.services.async_register(DOMAIN, "discover", _discover, schema=DISCOVER_SCHEMA)
     hass.services.async_register(DOMAIN, "send_raw", _send_raw, schema=SEND_RAW_SCHEMA)
     hass.services.async_register(
@@ -100,6 +120,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> 
     )
     hass.services.async_register(
         DOMAIN, "read_chars", _read_chars, schema=DISCOVER_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+    )
+    hass.services.async_register(
+        DOMAIN, "capture_adverts", _capture_adverts, schema=CAPTURE_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
     if not entry.data.get(CONF_STRANDS):
@@ -129,4 +153,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) ->
         hass.services.async_remove(DOMAIN, "send_raw")
         hass.services.async_remove(DOMAIN, "find_key")
         hass.services.async_remove(DOMAIN, "read_chars")
+        hass.services.async_remove(DOMAIN, "capture_adverts")
     return ok

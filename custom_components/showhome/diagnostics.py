@@ -26,4 +26,5 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowHom
             if is_showhome(i)
         ],
         "history": list(mesh.history),
+        "capture": list(mesh.capture),
     }

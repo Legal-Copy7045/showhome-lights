@@ -67,6 +67,7 @@ class ShowHomeMesh:
         self.gatt_services: list[dict] = []
         self._via: str | None = None
         self._verified_count = 0
+        self.capture: list[dict] = []
 
     def _log(self, kind: str, **data) -> None:
         self.history.append({"t": round(time.time(), 3), "kind": kind, **data})
@@ -302,6 +303,85 @@ class ShowHomeMesh:
         self._log("find_key", **{k: v for k, v in summary.items() if k != "network_tag_candidates"})
         self._log("network_tags", tags=network_tag_candidates(self._pin))
         return summary
+
+    async def async_capture_adverts(self, seconds: int = 45, all_devices: bool = False) -> dict:
+        """Record every advertisement the proxies deliver for a window.
+
+        Registers a bluetooth callback (so nothing is lost to snapshot
+        polling) and stores each advert's raw bytes, manufacturer/service
+        data, source proxy and timestamp. Used to look for mesh commands
+        rebroadcast over the air while the Show App drives the lights.
+        """
+        from homeassistant.components.bluetooth import (
+            BluetoothChange,
+            BluetoothScanningMode,
+            async_register_callback,
+        )
+        from homeassistant.components.bluetooth.match import BluetoothCallbackMatcher
+
+        self.capture = []
+        records = self.capture
+
+        @callback
+        def _on_adv(info: bluetooth.BluetoothServiceInfoBleak, change: BluetoothChange) -> None:
+            name = info.name or ""
+            if not all_devices and not (SERVICE_UUID in (info.service_uuids or []) or name.upper().startswith("LA")):
+                return
+            if len(records) >= 12000:
+                return
+            raw = getattr(info, "raw", None)
+            records.append(
+                {
+                    "t": round(time.time(), 3),
+                    "address": info.address,
+                    "name": info.name,
+                    "rssi": info.rssi,
+                    "source": getattr(info, "source", None),
+                    "mfr": {str(k): v.hex() for k, v in (info.manufacturer_data or {}).items()},
+                    "svc": {k: v.hex() for k, v in (info.service_data or {}).items()},
+                    "raw": raw.hex() if isinstance(raw, (bytes, bytearray)) else None,
+                }
+            )
+
+        cancels = [
+            async_register_callback(
+                self.hass, _on_adv, BluetoothCallbackMatcher(connectable=False), BluetoothScanningMode.ACTIVE
+            )
+        ]
+        # A second matcher on the control service, in case the broad one is narrowed by HA.
+        cancels.append(
+            async_register_callback(
+                self.hass,
+                _on_adv,
+                BluetoothCallbackMatcher(connectable=False, service_uuid=SERVICE_UUID),
+                BluetoothScanningMode.ACTIVE,
+            )
+        )
+        try:
+            await asyncio.sleep(seconds)
+        finally:
+            for cancel in cancels:
+                cancel()
+
+        # De-duplicate (both callbacks may deliver the same advert).
+        seen: set = set()
+        unique = []
+        for r in records:
+            key = (r["t"], r["address"], r["raw"], tuple(sorted(r["mfr"].items())))
+            if key not in seen:
+                seen.add(key)
+                unique.append(r)
+        self.capture = unique
+        la = [r for r in unique if (r["name"] or "").upper().startswith("LA")]
+        cmd_like = [r for r in unique if r["mfr"] or r["svc"]]
+        self._log("capture_done", seconds=seconds, total=len(unique), la_adverts=len(la), with_data=len(cmd_like))
+        return {
+            "seconds": seconds,
+            "total_adverts": len(unique),
+            "la_adverts": len(la),
+            "adverts_with_mfr_or_svc_data": len(cmd_like),
+            "distinct_addresses": len({r["address"] for r in unique}),
+        }
 
     async def async_read_chars(self, via: str | None = None) -> dict:
         """Read the readable FEF1 characteristics (may expose CSRmesh state)."""

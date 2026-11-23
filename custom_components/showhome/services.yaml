@@ -37,3 +37,13 @@ read_chars:
     via:
       selector:
         text:
+capture_adverts:
+  fields:
+    seconds:
+      default: 45
+      selector:
+        number: { min: 5, max: 180, mode: box }
+    all:
+      default: false
+      selector:
+        boolean:
