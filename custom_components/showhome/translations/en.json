@@ -20,8 +20,9 @@
     "step": {
       "init": {
         "title": "Brightness",
-        "description": "How many brightness steps the lights have. Full brightness in Home Assistant sends this value.",
+        "description": "The password you set in the Show App, and how many brightness steps the lights have. Close the Show App before saving.",
         "data": {
+          "pin": "Network password",
           "brightness_levels": "Brightness steps"
         }
       }

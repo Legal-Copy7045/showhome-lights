@@ -63,10 +63,16 @@ class ShowHomeOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(data=user_input)
-        current = self.config_entry.options.get(CONF_BRIGHTNESS_LEVELS, DEFAULT_BRIGHTNESS_LEVELS)
+        current_levels = self.config_entry.options.get(CONF_BRIGHTNESS_LEVELS, DEFAULT_BRIGHTNESS_LEVELS)
+        current_pin = self.config_entry.options.get(CONF_PIN, self.config_entry.data.get(CONF_PIN, ""))
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
-                {vol.Required(CONF_BRIGHTNESS_LEVELS, default=current): vol.All(vol.Coerce(int), vol.Range(1, 255))}
+                {
+                    vol.Optional(CONF_PIN, default=current_pin): str,
+                    vol.Required(CONF_BRIGHTNESS_LEVELS, default=current_levels): vol.All(
+                        vol.Coerce(int), vol.Range(1, 255)
+                    ),
+                }
             ),
         )

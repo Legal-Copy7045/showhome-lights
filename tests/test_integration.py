@@ -252,3 +252,21 @@ async def test_unreachable_lights_raise_clean_error(hass: HomeAssistant) -> None
         await hass.async_block_till_done()
         with pytest.raises(HomeAssistantError):
             await hass.services.async_call(DOMAIN, "send_raw", {"p1": 1, "p2": 1, "p3": 3}, blocking=True)
+
+
+async def test_password_from_options_is_used(hass: HomeAssistant, client) -> None:
+    """A password set via the options flow must be what encrypts commands."""
+    from custom_components.showhome.csrmesh import derive_key
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_PIN: "", CONF_STRANDS: {"LA3000014F9EC": 5}},
+        options={"pin": "holiday1", "brightness_levels": 10},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await hass.services.async_call(DOMAIN, "send_raw", {"p1": 1, "p2": 1, "p3": 3}, blocking=True)
+    # packets must decrypt with the options password, not the blank data one
+    assert _sent(client, "holiday1")
+    assert entry.runtime_data._key == derive_key("holiday1")

@@ -15,7 +15,7 @@ from .mesh import is_showhome
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> dict[str, Any]:
     mesh = entry.runtime_data
     return {
-        "pin_set": bool(entry.data.get("pin")),
+        "pin_set": bool(entry.options.get("pin", entry.data.get("pin"))),
         "options": dict(entry.options),
         "strands": entry.data.get(CONF_STRANDS, {}),
         "connected_via": mesh.connected_name,

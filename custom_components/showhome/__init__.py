@@ -34,7 +34,8 @@ DISCOVER_SCHEMA = vol.Schema({vol.Optional("via"): cv.string})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShowHomeConfigEntry) -> bool:
-    mesh = ShowHomeMesh(hass, entry.data.get(CONF_PIN, ""))
+    # The password can be set at install (data) or changed later (options).
+    mesh = ShowHomeMesh(hass, entry.options.get(CONF_PIN, entry.data.get(CONF_PIN, "")))
     mesh.options_snapshot = dict(entry.options)
     entry.runtime_data = mesh
 
